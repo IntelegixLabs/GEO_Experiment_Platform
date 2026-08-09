@@ -30,7 +30,7 @@ from app.schemas.study import GEOOptimizationApply, GEOOptimizationScope
 from app.api.routes.admin import _geo_scope_summary, _geo_assignment_stream, _geo_config_response, _apply_geo_feature_toggles
 from app.services.vector_db import index_products
 
-BATCH_SIZE = 500
+BATCH_SIZE = 20
 
 def main():
     parser = argparse.ArgumentParser(description="Run large scale GEO optimization")
