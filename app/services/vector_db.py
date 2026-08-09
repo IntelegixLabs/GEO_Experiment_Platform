@@ -17,14 +17,17 @@ def generate_embeddings(texts: list[str]) -> list[list[float]]:
     global _openai_client
     if _openai_client is None:
         _openai_client = OpenAI()
-
-    # Generate embeddings using OpenAI's text-embedding-3-small, constrained to 384 dimensions to match our DB schema
-    response = _openai_client.embeddings.create(
-        input=texts,
-        model="text-embedding-3-small",
-        dimensions=384
-    )
-    return [data.embedding for data in response.data]
+    embeddings = []
+    chunk_size = 2000
+    for i in range(0, len(texts), chunk_size):
+        chunk = texts[i:i + chunk_size]
+        response = _openai_client.embeddings.create(
+            input=chunk,
+            model="text-embedding-3-small",
+            dimensions=384
+        )
+        embeddings.extend([data.embedding for data in response.data])
+    return embeddings
 
 
 def clear_collection():

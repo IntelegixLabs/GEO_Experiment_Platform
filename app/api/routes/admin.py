@@ -248,8 +248,7 @@ def _geo_assignment_stream(db: DBSession, scope: dict[str, Any], payload: GEOOpt
             )
         current_pair: str | None = None
         pair_rows: list[Product] = []
-        for product in db.scalars(statement.order_by(Product.pair_id, Product.id).execution_options(
-                yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
+        for product in db.scalars(statement.order_by(Product.pair_id, Product.id)).all():
             if current_pair is not None and product.pair_id != current_pair:
                 parity = int(hashlib.sha256(f"{payload.random_seed}:{current_pair}".encode("utf-8")).hexdigest(),
                              16) % 2
@@ -292,8 +291,7 @@ def _geo_assignment_stream(db: DBSession, scope: dict[str, Any], payload: GEOOpt
         order_by_args = (Product.category, Product.id)
 
     total_seen = 0
-    for product in db.scalars(
-            statement.order_by(*order_by_args).execution_options(yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
+    for product in db.scalars(statement.order_by(*order_by_args)).all():
         if limit is not None and total_seen >= limit:
             break
         condition = "GEO_OPTIMIZED" if ((
@@ -429,9 +427,9 @@ def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -
             safety_notes_json=[
                 "Factual GEO bundles are generated from catalog facts only.",
                 "Parameter weights and optimization target are persisted study settings; they do not invoke an external LLM.",
-                *(
-                    ["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
-                        outcome_counts.values()) else []),
+                *([
+                      "This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
+                    outcome_counts.values()) else []),
             ], created_at=now,
         )
         db.add(application)
@@ -581,9 +579,9 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
             safety_notes_json=[
                 "Factual GEO bundles are generated from catalog facts only.",
                 "Parameter weights and optimization target are persisted study settings; they do not invoke an external LLM.",
-                *(
-                    ["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
-                        outcome_counts.values()) else []),
+                *([
+                      "This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
+                    outcome_counts.values()) else []),
             ], created_at=now,
         )
         db.add(application)
