@@ -86,8 +86,9 @@ def _geo_scope_summary(db: DBSession, scope: dict[str, Any]) -> dict[str, Any]:
     else:
         selected_count = int(db.scalar(count_statement) or 0)
         categories = raw_categories
-        if limit is not None:
-            selected_count = min(selected_count, limit)
+
+    if limit is not None:
+        selected_count = min(selected_count, limit)
 
     return {
         "scope": scope,
@@ -293,6 +294,8 @@ def _geo_assignment_stream(db: DBSession, scope: dict[str, Any], payload: GEOOpt
     total_seen = 0
     for product in db.scalars(
             statement.order_by(*order_by_args).execution_options(yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
+        if limit is not None and total_seen >= limit:
+            break
         condition = "GEO_OPTIMIZED" if ((
                                                     total_seen * payload.treatment_percentage) % 100) < payload.treatment_percentage else "CONTROL"
         total_seen += 1
@@ -592,8 +595,7 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
             return
         if updated_records_for_index:
             try:
-                from app.services.vector_db import clear_collection, index_products
-                clear_collection()
+                from app.services.vector_db import index_products
                 index_products(updated_records_for_index)
             except Exception as e:
                 print(f"Vector DB indexing error: {e}")
@@ -632,6 +634,13 @@ def apply_geo_optimization(payload: GEOOptimizationApply, stream: bool = False, 
     if not stream or payload.dry_run:
         return _apply_geo_optimization_sync(payload, db)
     return StreamingResponse(_apply_geo_optimization_stream(payload, db), media_type="application/x-ndjson")
+
+
+@router.delete("/admin/vector-db/clear", status_code=200)
+def clear_vector_db(db: DBSession = Depends(get_db)):
+    from app.services.vector_db import clear_collection
+    clear_collection()
+    return {"status": "success", "message": "Vector DB cleared"}
 
 
 @router.post("/admin/products/import", status_code=201)
