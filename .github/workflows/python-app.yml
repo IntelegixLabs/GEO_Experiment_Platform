@@ -25,7 +25,6 @@ jobs:
         python-version: "3.11.4"
     - name: Install dependencies
       run: |
-        cd GEO_Code
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     
