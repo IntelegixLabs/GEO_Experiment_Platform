@@ -49,7 +49,7 @@ def _build_engine(database_url: str) -> Engine:
             "certs",
             "cc-ca.crt",
         )
-    connect_args = ["sslmode"] = "verify-full"
+    connect_args["sslmode"] = "verify-full"
     engine = create_engine(normalized_url, connect_args=connect_args, **engine_kwargs)
     if is_sqlite:
         event.listen(engine, "connect", _enable_sqlite_foreign_keys)
