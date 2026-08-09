@@ -9,12 +9,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session as DBSession
+from sqlalchemy.orm import Session as DBSession, aliased
 
 from app.core.catalog import parse_catalog_csv, product_from_import, product_record
 from app.core.experiment import build_geo_bundle, utc_now, assign_conditions
 from app.db.session import get_db
-from app.models import Event, GEOOptimizationApplication, GEOOptimizationConfig, GEOOptimizedProduct, Product, Query, Session, SurveyResponse
+from app.models import Event, GEOOptimizationApplication, GEOOptimizationConfig, GEOOptimizedProduct, Product, Query, \
+    Session, SurveyResponse
 from app.schemas import CatalogImportCreate, GEOOptimizationApply
 from app.schemas.study import (
     GEO_ASSIGNMENT_STRATEGIES,
@@ -30,8 +31,10 @@ router = APIRouter(tags=["GEO study"])
 GEO_OPTIMIZATION_BATCH_SIZE = 250
 MAX_GEO_OPTIMIZATION_APPLY_PRODUCTS = 1_000_000
 
+
 def _bad_request(message: str) -> HTTPException:
     return HTTPException(status_code=400, detail=message)
+
 
 def _geo_scope_filters(scope: dict[str, Any]) -> list[Any]:
     scope_type = scope.get("type", "all_catalog")
@@ -46,15 +49,17 @@ def _geo_scope_filters(scope: dict[str, Any]) -> list[Any]:
         return [Product.pair_id.in_(pair_ids)]
     return []
 
+
 def _geo_scope_statement(scope: dict[str, Any]):
     statement = select(Product)
     filters = _geo_scope_filters(scope)
     if filters:
         statement = statement.where(*filters)
     limit = scope.get("limit")
-    if limit is not None:
+    if limit is not None and scope.get("type") not in ("all_catalog", "categories"):
         statement = statement.limit(limit)
     return statement
+
 
 def _geo_scope_summary(db: DBSession, scope: dict[str, Any]) -> dict[str, Any]:
     filters = _geo_scope_filters(scope)
@@ -63,14 +68,26 @@ def _geo_scope_summary(db: DBSession, scope: dict[str, Any]) -> dict[str, Any]:
     if filters:
         count_statement = count_statement.where(*filters)
         category_statement = category_statement.where(*filters)
-    categories = [
+    raw_categories = [
         {"category": category or "Uncategorised", "products": int(products)}
         for category, products in db.execute(category_statement.order_by(Product.category)).all()
     ]
     limit = scope.get("limit")
-    selected_count = int(db.scalar(count_statement) or 0)
-    if limit is not None:
-        selected_count = min(selected_count, limit)
+    if limit is not None and scope.get("type") in ("all_catalog", "categories"):
+        num_categories = len(raw_categories)
+        if num_categories > 0:
+            limit_per_cat = math.ceil(limit / num_categories)
+            for c in raw_categories:
+                c["products"] = min(c["products"], limit_per_cat)
+            selected_count = sum(c["products"] for c in raw_categories)
+        else:
+            selected_count = 0
+        categories = raw_categories
+    else:
+        selected_count = int(db.scalar(count_statement) or 0)
+        categories = raw_categories
+        if limit is not None:
+            selected_count = min(selected_count, limit)
 
     return {
         "scope": scope,
@@ -81,7 +98,9 @@ def _geo_scope_summary(db: DBSession, scope: dict[str, Any]) -> dict[str, Any]:
         "requires_narrower_scope": selected_count > MAX_GEO_OPTIMIZATION_APPLY_PRODUCTS,
     }
 
-def _geo_config_response(record: GEOOptimizationConfig | None = None, payload: GEOOptimizationApply | None = None) -> dict[str, Any]:
+
+def _geo_config_response(record: GEOOptimizationConfig | None = None, payload: GEOOptimizationApply | None = None) -> \
+dict[str, Any]:
     if record is not None:
         return {
             "id": record.id,
@@ -119,6 +138,7 @@ def _geo_config_response(record: GEOOptimizationConfig | None = None, payload: G
         "last_applied_at": None,
     }
 
+
 def _geo_options() -> dict[str, Any]:
     return {
         "model_profiles": list(GEO_MODEL_PROFILES),
@@ -136,6 +156,7 @@ def _geo_options() -> dict[str, Any]:
             "Weights and targets are persisted for reproducibility; the factual bundle builder remains integrity-gated."
         ),
     }
+
 
 def _apply_geo_feature_toggles(bundle: dict[str, Any], toggles: dict[str, bool]) -> dict[str, Any]:
     configured = json.loads(json.dumps(bundle, default=str))
@@ -183,6 +204,7 @@ def _apply_geo_feature_toggles(bundle: dict[str, Any], toggles: dict[str, bool])
     configured["content_hash"] = hashlib.sha256(stable_json(configured).encode("utf-8")).hexdigest()
     return configured
 
+
 def _geo_target_count(count: int, percentage: int) -> int:
     if count <= 0:
         return 0
@@ -190,6 +212,7 @@ def _geo_target_count(count: int, percentage: int) -> int:
         return int(percentage >= 50)
     target = int(math.floor((count * percentage / 100) + 0.5))
     return min(count - 1, max(1, target))
+
 
 def _geo_modular_assignment(index: int, count: int, percentage: int, seed: str, category: str) -> str:
     target = _geo_target_count(count, percentage)
@@ -203,6 +226,7 @@ def _geo_modular_assignment(index: int, count: int, percentage: int, seed: str, 
     while math.gcd(step, count) != 1:
         step = (step % count) + 1
     return "GEO_OPTIMIZED" if ((index * step + offset) % count) < target else "CONTROL"
+
 
 def _geo_assignment_stream(db: DBSession, scope: dict[str, Any], payload: GEOOptimizationApply):
     statement = _geo_scope_statement(scope)
@@ -223,9 +247,11 @@ def _geo_assignment_stream(db: DBSession, scope: dict[str, Any], payload: GEOOpt
             )
         current_pair: str | None = None
         pair_rows: list[Product] = []
-        for product in db.scalars(statement.order_by(Product.pair_id, Product.id).execution_options(yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
+        for product in db.scalars(statement.order_by(Product.pair_id, Product.id).execution_options(
+                yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
             if current_pair is not None and product.pair_id != current_pair:
-                parity = int(hashlib.sha256(f"{payload.random_seed}:{current_pair}".encode("utf-8")).hexdigest(), 16) % 2
+                parity = int(hashlib.sha256(f"{payload.random_seed}:{current_pair}".encode("utf-8")).hexdigest(),
+                             16) % 2
                 yield pair_rows[0], ("GEO_OPTIMIZED" if parity else "CONTROL")
                 yield pair_rows[1], ("CONTROL" if parity else "GEO_OPTIMIZED")
                 pair_rows = []
@@ -243,11 +269,35 @@ def _geo_assignment_stream(db: DBSession, scope: dict[str, Any], payload: GEOOpt
     if filters:
         counts_statement = counts_statement.where(*filters)
     counts = {str(category or ""): int(products) for category, products in db.execute(counts_statement).all()}
+
+    limit = scope.get("limit")
+    if limit is not None and scope.get("type") in ("all_catalog", "categories"):
+        num_categories = len(counts)
+        if num_categories > 0:
+            limit_per_category = math.ceil(limit / num_categories)
+            subq = select(
+                Product,
+                func.row_number().over(partition_by=Product.category, order_by=Product.id).label("rn")
+            )
+            if filters:
+                subq = subq.where(*filters)
+            subq = subq.subquery()
+            ProductAlias = aliased(Product, subq)
+            statement = select(ProductAlias).where(subq.c.rn <= limit_per_category)
+            order_by_args = (ProductAlias.category, ProductAlias.id)
+        else:
+            order_by_args = (Product.category, Product.id)
+    else:
+        order_by_args = (Product.category, Product.id)
+
     total_seen = 0
-    for product in db.scalars(statement.order_by(Product.category, Product.id).execution_options(yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
-        condition = "GEO_OPTIMIZED" if ((total_seen * payload.treatment_percentage) % 100) < payload.treatment_percentage else "CONTROL"
+    for product in db.scalars(
+            statement.order_by(*order_by_args).execution_options(yield_per=GEO_OPTIMIZATION_BATCH_SIZE)):
+        condition = "GEO_OPTIMIZED" if ((
+                                                    total_seen * payload.treatment_percentage) % 100) < payload.treatment_percentage else "CONTROL"
         total_seen += 1
         yield product, condition
+
 
 def _geo_assignment_prediction(db: DBSession, scope: dict[str, Any], payload: GEOOptimizationApply) -> tuple[int, int]:
     filters = _geo_scope_filters(scope)
@@ -271,10 +321,12 @@ def _geo_assignment_prediction(db: DBSession, scope: dict[str, Any], payload: GE
     geo_products = int(round(selected * (payload.treatment_percentage / 100.0)))
     return selected - geo_products, geo_products
 
+
 @router.get("/admin/geo-optimization/config")
 def geo_optimization_config(db: DBSession = Depends(get_db)) -> dict[str, Any]:
     active = db.scalar(
-        select(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).order_by(GEOOptimizationConfig.revision.desc())
+        select(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).order_by(
+            GEOOptimizationConfig.revision.desc())
     )
     config_payload = _geo_config_response(active)
     return {
@@ -283,6 +335,7 @@ def geo_optimization_config(db: DBSession = Depends(get_db)) -> dict[str, Any]:
         "scope_summary": _geo_scope_summary(db, config_payload["scope"]),
     }
 
+
 def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -> dict[str, Any]:
     scope = payload.scope.model_dump()
     scope_summary = _geo_scope_summary(db, scope)
@@ -290,13 +343,15 @@ def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -
     if selected_products == 0:
         raise _bad_request("The selected scope contains no products.")
     if scope_summary.get("requires_narrower_scope"):
-        raise _bad_request(f"This scope contains {selected_products:,} products. Apply is limited to {MAX_GEO_OPTIMIZATION_APPLY_PRODUCTS:,} products per wave; select categories, product IDs, or pair IDs. A dry run remains available for this scope.")
+        raise _bad_request(
+            f"This scope contains {selected_products:,} products. Apply is limited to {MAX_GEO_OPTIMIZATION_APPLY_PRODUCTS:,} products per wave; select categories, product IDs, or pair IDs. A dry run remains available for this scope.")
     outcome_counts = {
         name: int(db.scalar(select(func.count()).select_from(model)) or 0)
         for name, model in (("events", Event), ("queries", Query), ("surveys", SurveyResponse))
     }
     previous_assignments = {
-        "geo_optimized": int(db.scalar(select(func.count()).select_from(Product).where(Product.condition == "GEO_OPTIMIZED")) or 0),
+        "geo_optimized": int(
+            db.scalar(select(func.count()).select_from(Product).where(Product.condition == "GEO_OPTIMIZED")) or 0),
         "control": int(db.scalar(select(func.count()).select_from(Product).where(Product.condition == "CONTROL")) or 0)
     }
     control_products = 0
@@ -347,7 +402,8 @@ def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -
     now = utc_now()
     if not payload.dry_run:
         revision = int(db.scalar(select(func.coalesce(func.max(GEOOptimizationConfig.revision), 0))) or 0) + 1
-        db.execute(update(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).values(is_active=False))
+        db.execute(
+            update(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).values(is_active=False))
         config_record = GEOOptimizationConfig(
             id=f"GOC-{uuid.uuid4().hex}", revision=revision, name=payload.name,
             optimization_target=payload.optimization_target, model_profile=payload.model_profile,
@@ -364,12 +420,15 @@ def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -
             id=run_id, config_id=config_record.id, config_snapshot_json=config_snapshot,
             scope_summary_json=scope_summary, previous_assignment_json=previous_assignments,
             application_summary_json={"selected_products": selected_products, "updated_products": updated_products,
-                                      "control_products": control_products, "geo_optimized_products": geo_optimized_products,
+                                      "control_products": control_products,
+                                      "geo_optimized_products": geo_optimized_products,
                                       "integrity_failure_count": len(integrity_failures)},
             safety_notes_json=[
                 "Factual GEO bundles are generated from catalog facts only.",
                 "Parameter weights and optimization target are persisted study settings; they do not invoke an external LLM.",
-                *(["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(outcome_counts.values()) else []),
+                *(
+                    ["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
+                        outcome_counts.values()) else []),
             ], created_at=now,
         )
         db.add(application)
@@ -413,6 +472,7 @@ def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -
         },
     }
 
+
 def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession):
     try:
         scope = payload.scope.model_dump()
@@ -422,15 +482,18 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
             yield json.dumps({"status": "error", "message": "The selected scope contains no products."}) + "\n"
             return
         if scope_summary.get("requires_narrower_scope"):
-            yield json.dumps({"status": "error", "message": f"This scope contains {selected_products:,} products. Apply is limited to {MAX_GEO_OPTIMIZATION_APPLY_PRODUCTS:,} products per wave."}) + "\n"
+            yield json.dumps({"status": "error",
+                              "message": f"This scope contains {selected_products:,} products. Apply is limited to {MAX_GEO_OPTIMIZATION_APPLY_PRODUCTS:,} products per wave."}) + "\n"
             return
         outcome_counts = {
             name: int(db.scalar(select(func.count()).select_from(model)) or 0)
             for name, model in (("events", Event), ("queries", Query), ("surveys", SurveyResponse))
         }
         previous_assignments = {
-            "geo_optimized": int(db.scalar(select(func.count()).select_from(Product).where(Product.condition == "GEO_OPTIMIZED")) or 0),
-            "control": int(db.scalar(select(func.count()).select_from(Product).where(Product.condition == "CONTROL")) or 0)
+            "geo_optimized": int(
+                db.scalar(select(func.count()).select_from(Product).where(Product.condition == "GEO_OPTIMIZED")) or 0),
+            "control": int(
+                db.scalar(select(func.count()).select_from(Product).where(Product.condition == "CONTROL")) or 0)
         }
         control_products = 0
         geo_optimized_products = 0
@@ -491,7 +554,8 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
         db.flush()
         now = utc_now()
         revision = int(db.scalar(select(func.coalesce(func.max(GEOOptimizationConfig.revision), 0))) or 0) + 1
-        db.execute(update(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).values(is_active=False))
+        db.execute(
+            update(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).values(is_active=False))
         config_record = GEOOptimizationConfig(
             id=f"GOC-{uuid.uuid4().hex}", revision=revision, name=payload.name,
             optimization_target=payload.optimization_target, model_profile=payload.model_profile,
@@ -508,12 +572,15 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
             id=run_id, config_id=config_record.id, config_snapshot_json=config_snapshot,
             scope_summary_json=scope_summary, previous_assignment_json=previous_assignments,
             application_summary_json={"selected_products": selected_products, "updated_products": updated_products,
-                                      "control_products": control_products, "geo_optimized_products": geo_optimized_products,
+                                      "control_products": control_products,
+                                      "geo_optimized_products": geo_optimized_products,
                                       "integrity_failure_count": len(integrity_failures)},
             safety_notes_json=[
                 "Factual GEO bundles are generated from catalog facts only.",
                 "Parameter weights and optimization target are persisted study settings; they do not invoke an external LLM.",
-                *(["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(outcome_counts.values()) else []),
+                *(
+                    ["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
+                        outcome_counts.values()) else []),
             ], created_at=now,
         )
         db.add(application)
@@ -559,11 +626,13 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
         db.rollback()
         yield json.dumps({"status": "error", "message": str(e)}) + "\n"
 
+
 @router.post("/admin/geo-optimization/apply", status_code=201, response_model=None)
 def apply_geo_optimization(payload: GEOOptimizationApply, stream: bool = False, db: DBSession = Depends(get_db)):
     if not stream or payload.dry_run:
         return _apply_geo_optimization_sync(payload, db)
     return StreamingResponse(_apply_geo_optimization_stream(payload, db), media_type="application/x-ndjson")
+
 
 @router.post("/admin/products/import", status_code=201)
 def import_catalog(payload: CatalogImportCreate, db: DBSession = Depends(get_db)) -> dict[str, Any]:
@@ -619,10 +688,10 @@ def vectordb_status() -> dict[str, Any]:
 
 @router.get("/admin/vectordb/products")
 def vectordb_products(
-    page: int = 1,
-    limit: int = 20,
-    query: str | None = None,
-    category_filter: str | None = None,
+        page: int = 1,
+        limit: int = 20,
+        query: str | None = None,
+        category_filter: str | None = None,
 ) -> dict[str, Any]:
     from app.services.vector_db import get_indexed_products_page
     return get_indexed_products_page(
@@ -635,11 +704,11 @@ def vectordb_products(
 
 @router.get("/admin/respondents")
 def admin_list_respondents(
-    page: int = 1,
-    limit: int = 20,
-    query: str | None = None,
-    cohort: str | None = None,
-    db: DBSession = Depends(get_db),
+        page: int = 1,
+        limit: int = 20,
+        query: str | None = None,
+        cohort: str | None = None,
+        db: DBSession = Depends(get_db),
 ) -> dict[str, Any]:
     page = max(1, page)
     limit = max(1, min(100, limit))
@@ -771,16 +840,17 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+
 @router.post("/verify")
 def verify_admin(request: LoginRequest) -> dict[str, bool]:
     from app.core.config import get_settings
     settings = get_settings()
-    
+
     # If no credentials are required by the environment, allow access
     if not settings.admin_user and not settings.admin_password:
         return {"success": True}
-        
+
     if request.username == settings.admin_user and request.password == settings.admin_password:
         return {"success": True}
-        
+
     raise HTTPException(status_code=401, detail="Invalid username or password")
