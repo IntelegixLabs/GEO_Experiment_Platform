@@ -711,6 +711,21 @@ def vectordb_products(
     )
 
 
+@router.get("/admin/respondents/demographics")
+def admin_respondents_demographics(db: DBSession = Depends(get_db)) -> dict[str, Any]:
+    rows = db.execute(
+        select(Session.country, func.count().label("count"))
+        .where(Session.country.is_not(None))
+        .where(Session.country != "")
+        .group_by(Session.country)
+        .order_by(func.count().desc())
+    ).all()
+
+    return {
+        "demographics": [{"country": row.country, "count": int(row.count)} for row in rows]
+    }
+
+
 @router.get("/admin/respondents")
 def admin_list_respondents(
         page: int = 1,
