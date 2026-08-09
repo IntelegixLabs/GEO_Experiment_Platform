@@ -42,7 +42,7 @@ def _build_engine(database_url: str) -> Engine:
 
     elif is_postgres or is_cockroachdb:
         engine_kwargs.update(
-            pool_pre_ping=False,
+            pool_pre_ping=True,
             pool_recycle=600,
             pool_size=5,
             max_overflow=10,
