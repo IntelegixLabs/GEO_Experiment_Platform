@@ -20,8 +20,10 @@ from app.services.retrieval import RetrievalConfig
 router = APIRouter(tags=["GEO study"])
 RETRIEVAL_POOL_SIZE = 250
 
+
 def _bad_request(message: str) -> HTTPException:
     return HTTPException(status_code=400, detail=message)
+
 
 def _active_session(db: DBSession, session_id: str) -> Session:
     if not session_id or not str(session_id).strip():
@@ -44,6 +46,7 @@ def _active_session(db: DBSession, session_id: str) -> Session:
         db.commit()
     return session
 
+
 def _search_terms(value: str | None, *, maximum: int = 8) -> list[str]:
     terms: list[str] = []
     for token in tokenize(value or ""):
@@ -53,6 +56,7 @@ def _search_terms(value: str | None, *, maximum: int = 8) -> list[str]:
         if len(terms) >= maximum:
             break
     return terms
+
 
 def _product_text_predicate(terms: list[str]):
     if not terms:
@@ -66,12 +70,13 @@ def _product_text_predicate(terms: list[str]):
         ]
     )
 
+
 def _catalog_records(
-    db: DBSession,
-    category_filter: str | None = None,
-    query_text: str | None = None,
-    *,
-    limit: int = RETRIEVAL_POOL_SIZE,
+        db: DBSession,
+        category_filter: str | None = None,
+        query_text: str | None = None,
+        *,
+        limit: int = RETRIEVAL_POOL_SIZE,
 ) -> list[dict[str, Any]]:
     # Search ONLY ChromaDB Vector DB using semantic similarity matching
     try:
@@ -91,7 +96,8 @@ def _catalog_records(
                             condition=str(prod_dict.get("condition") or "CONTROL"),
                             price=float(prod_dict.get("price", 0)) if prod_dict.get("price") is not None else None,
                             description=str(prod_dict.get("description") or ""),
-                            key_features=prod_dict.get("key_features") if isinstance(prod_dict.get("key_features"), list) else [],
+                            key_features=prod_dict.get("key_features") if isinstance(prod_dict.get("key_features"),
+                                                                                     list) else [],
                             created_at=utc_now(),
                         )
                     )
@@ -104,6 +110,7 @@ def _catalog_records(
         print(f"Vector DB retrieval error in assistant_query: {e}")
         return []
 
+
 def _candidate_payload(product: dict[str, Any], position: int) -> dict[str, Any]:
     return {
         "rank_position": position,
@@ -114,14 +121,17 @@ def _candidate_payload(product: dict[str, Any], position: int) -> dict[str, Any]
         "evidence_score": float(product.get("evidence_score", 0.0)),
     }
 
+
 def _active_geo_service(db: DBSession) -> GEOService | None:
     active = db.scalar(
-        select(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).order_by(GEOOptimizationConfig.revision.desc())
+        select(GEOOptimizationConfig).where(GEOOptimizationConfig.is_active.is_(True)).order_by(
+            GEOOptimizationConfig.revision.desc())
     )
     if active is None:
         return None
     weights = dict(GEO_PARAMETER_WEIGHT_DEFAULTS)
-    weights.update({key: float(value) for key, value in (active.parameter_weights_json or {}).items() if key in weights})
+    weights.update(
+        {key: float(value) for key, value in (active.parameter_weights_json or {}).items() if key in weights})
     settings = get_settings()
     generation_adapter = None
     if settings.openai_api_key:
@@ -130,12 +140,13 @@ def _active_geo_service(db: DBSession) -> GEOService | None:
             model_name=settings.openai_model_name,
             api_key=settings.openai_api_key,
         )
-        
+
     return GEOService(
         retrieval_config=RetrievalConfig(**weights, version=f"geo-config-{active.revision}"),
         generation_adapter=generation_adapter,
         allow_external_generation=bool(generation_adapter),
     )
+
 
 @router.post("/assistant/query", status_code=201)
 def assistant_query(payload: AssistantQueryCreate, db: DBSession = Depends(get_db)) -> dict[str, Any]:
@@ -182,6 +193,7 @@ def assistant_query(payload: AssistantQueryCreate, db: DBSession = Depends(get_d
         raise _bad_request(f"Database constraint: {error.orig}") from error
     return {"query_id": query_id, **response_payload}
 
+
 @router.post("/admin/probes", status_code=201)
 def run_probes(payload: ProbeCreate, db: DBSession = Depends(get_db)) -> dict[str, Any]:
     query_text = trim_text(payload.query, 500)
@@ -221,12 +233,28 @@ def run_probes(payload: ProbeCreate, db: DBSession = Depends(get_db)) -> dict[st
         for position, product in enumerate(ranked, start=1):
             candidate = _candidate_payload(product, position)
             db.add(ProbeCandidate(probe_run_id=probe_id, cited=product["id"] in cited_ids, **candidate))
+        candidates_detail = []
+        for pos, product in enumerate(ranked[:10], start=1):
+            candidates_detail.append({
+                "rank_position": pos,
+                "product_id": product["id"],
+                "title": product.get("title", ""),
+                "category": product.get("category", ""),
+                "condition": product.get("condition", "UNKNOWN"),
+                "retrieval_score": round(float(product.get("retrieval_score", product.get("score", 0.0))), 3),
+                "lexical_score": round(float(product.get("lexical_score", 0.0)), 3),
+                "semantic_score": round(float(product.get("semantic_score", 0.0)), 3),
+                "evidence_score": round(float(product.get("evidence_score", 0.0)), 3),
+                "cited": product["id"] in cited_ids,
+            })
         runs.append(
             {
                 "probe_run_id": probe_id,
                 "repetition": repetition,
                 "cited_products": [product["title"] for product in cited],
                 "cited_conditions": [product["condition"] for product in cited],
+                "answer": answer,
+                "candidates": candidates_detail,
             }
         )
     db.commit()

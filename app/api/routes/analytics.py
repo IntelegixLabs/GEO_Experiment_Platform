@@ -57,6 +57,14 @@ def _dashboard(db: DBSession) -> dict[str, Any]:
             .group_by(Product.condition)
         ).all()
     )
+    purchases = dict(
+        db.execute(
+            select(Product.condition, func.count().label("purchases"))
+            .join(Event, Event.product_id == Product.id)
+            .where(Event.event_type == "purchase_intent")
+            .group_by(Product.condition)
+        ).all()
+    )
     metrics: list[dict[str, Any]] = []
     metrics_by_condition = {row.condition: row for row in rows}
     for condition in CONDITIONS:
@@ -75,6 +83,8 @@ def _dashboard(db: DBSession) -> dict[str, Any]:
                 "mean_evidence_score": round(float(row.mean_evidence_score or 0), 3) if row else 0.0,
                 "engagement_events": int(clicks.get(condition, 0)),
                 "engagement_per_citation": round(int(clicks.get(condition, 0)) / cited, 4) if cited else None,
+                "purchase_events": int(purchases.get(condition, 0)),
+                "purchases_per_citation": round(int(purchases.get(condition, 0)) / cited, 4) if cited else None,
             }
         )
     constructs: dict[str, list[float]] = defaultdict(list)
