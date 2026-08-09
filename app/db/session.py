@@ -44,7 +44,12 @@ def _build_engine(database_url: str) -> Engine:
             max_overflow=10,
             pool_timeout=30,
         )
-
+    connect_args["sslrootcert"] = os.path.join(
+            os.path.dirname(__file__),
+            "certs",
+            "cc-ca.crt",
+        )
+    connect_args = ["sslmode"] = "verify-full"
     engine = create_engine(normalized_url, connect_args=connect_args, **engine_kwargs)
     if is_sqlite:
         event.listen(engine, "connect", _enable_sqlite_foreign_keys)
