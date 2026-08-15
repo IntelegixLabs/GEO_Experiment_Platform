@@ -32,12 +32,14 @@ CONDITION_ALIASES = {
 }
 
 DEFAULT_SCALE_MAP: dict[str, tuple[str, ...]] = {
-    "recommendation_quality": ("rq1", "rq2", "rq3"),
-    "citation_credibility": ("sc1", "sc2", "sc3"),
-    "trust": ("tr1", "tr2", "tr3"),
-    "usefulness": ("pu1", "pu2", "pu3"),
-    "risk": ("pr1", "pr2", "pr3"),
+    "recommendation_quality": ("rq1", "rq2", "rq3", "rq4"),
+    "relevance_accuracy": ("ra1", "ra2", "ra3"),
+    "usefulness": ("pu1", "pu2", "pu3", "pu4"),
+    "trust": ("tr1", "tr2", "tr3", "tr4"),
+    "decision_satisfaction": ("ds1", "ds2", "ds3"),
+    "agent_satisfaction": ("rs1", "rs2", "rs3"),
     "purchase_intention": ("pi1", "pi2", "pi3"),
+    "reuse_intention": ("ri1", "ri2", "ri3"),
 }
 
 
@@ -204,9 +206,15 @@ def scale_scores(
 
     result: dict[str, float | None] = {}
     for construct, items in scale_map.items():
-        values = [safe_float(answers.get(item)) for item in items]
-        valid = [value for value in values if value is not None and lower <= value <= upper]
-        result[str(construct)] = round(sum(valid) / len(valid), 3) if valid else None
+        values = []
+        for item in items:
+            try:
+                value = safe_float(answers.get(item))
+                if value is not None and lower <= value <= upper:
+                    values.append(value)
+            except (TypeError, ValueError):
+                continue
+        result[str(construct)] = round(sum(values) / len(values), 3) if values else None
     return result
 
 

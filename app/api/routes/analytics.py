@@ -10,6 +10,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.config import CONDITIONS
+from app.core.experiment import SCALE_MAP
 from app.db.session import get_db
 from app.models import (
     Event,
@@ -90,19 +91,20 @@ def _dashboard(db: DBSession) -> dict[str, Any]:
     constructs: dict[str, list[float]] = defaultdict(list)
     for response in db.scalars(select(SurveyResponse)).all():
         for construct, value in (response.scale_scores_json or {}).items():
-            if value is not None:
+            if value is not None and construct in SCALE_MAP:
                 constructs[construct].append(float(value))
     survey_means = {
         construct: round(sum(values) / len(values), 3)
         for construct, values in constructs.items()
         if values
     }
+    balance_cat = func.coalesce(Product.main_category, Product.category)
     balance = [
         {"condition": condition, "category": category, "products": int(products)}
         for condition, category, products in db.execute(
-            select(Product.condition, Product.category, func.count().label("products"))
-            .group_by(Product.condition, Product.category)
-            .order_by(Product.category, Product.condition)
+            select(Product.condition, balance_cat.label("cat"), func.count().label("products"))
+            .group_by(Product.condition, balance_cat)
+            .order_by(balance_cat, Product.condition)
         ).all()
     ]
     return {
