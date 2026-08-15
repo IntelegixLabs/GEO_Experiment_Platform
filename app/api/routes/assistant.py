@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.catalog import product_record, public_product
@@ -182,15 +182,28 @@ def assistant_query(payload: AssistantQueryCreate, db: DBSession = Depends(get_d
         response_json=response_payload,
         created_at=utc_now(),
     )
-    db.add(record)
-    for position, product in enumerate(ranked, start=1):
-        candidate = _candidate_payload(product, position)
-        db.add(QueryCandidate(query_id=query_id, cited=product["id"] in cited_ids, **candidate))
-    try:
-        db.commit()
-    except IntegrityError as error:
-        db.rollback()
-        raise _bad_request(f"Database constraint: {error.orig}") from error
+    candidates = [
+        QueryCandidate(query_id=query_id, cited=product["id"] in cited_ids, **_candidate_payload(product, position))
+        for position, product in enumerate(ranked, start=1)
+    ]
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            db.add(record)
+            db.add_all(candidates)
+            db.commit()
+            break
+        except OperationalError as error:
+            db.rollback()
+            if getattr(error.orig, "sqlstate", None) == "40001" and attempt < max_retries - 1:
+                import time
+                time.sleep(0.1 * (2 ** attempt))
+                continue
+            raise
+        except IntegrityError as error:
+            db.rollback()
+            raise _bad_request(f"Database constraint: {error.orig}") from error
     return {"query_id": query_id, **response_payload}
 
 

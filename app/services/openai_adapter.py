@@ -32,10 +32,12 @@ class OpenAIGenerationAdapter:
             "1. You may only state facts provided in the ALLOWED CLAIMS list below.\n"
             "2. When you use a claim, you MUST append its exact citation ID (e.g., [C1]).\n"
             "3. Do not invent any facts, prices, ratings, or product details.\n"
-            "4. Output your response as a valid JSON object matching this schema:\n"
-            '   {"answer": "Your natural language response with citation markers like [C1] and [C2]",\n'
+            "4. End your `answer` by actively interacting with the user or asking an engaging question to keep the conversation going.\n"
+            "5. Output your response as a valid JSON object matching this schema:\n"
+            '   {"answer": "Your natural language response with citation markers like [C1] and [C2] ending with a conversational question",\n'
             '    "used_citation_ids": ["C1", "C2"],\n'
-            '    "suggested_follow_ups": ["Short follow-up question 1?", "Question 2?"]}\n\n'
+            '    "suggested_follow_ups": ["Can you tell me if [Product] has a warranty?", "What are the alternatives to [Brand]?"]}\n\n'
+            "Note: `suggested_follow_ups` MUST be 2-3 preemptive questions phrased from the USER's perspective that they might want to click next.\n\n"
             "ALLOWED CLAIMS:\n"
         )
         
