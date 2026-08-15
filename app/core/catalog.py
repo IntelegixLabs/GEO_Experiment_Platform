@@ -94,6 +94,7 @@ def public_product(product: Product | dict[str, Any]) -> dict[str, Any]:
         "image_url": record.get("image_url") or "",
         "product_page": {
             "description": record.get("description") or "",
+            "summary": bundle.get("summary", ""),
             "key_features": features,
             "specifications": bundle.get("specifications", {}),
             "faq": bundle.get("faq", []),
@@ -135,28 +136,37 @@ def parse_catalog_csv(csv_text: str) -> list[dict[str, Any]]:
             for key, value in raw.items()
             if key
         }
-        title = row.get("title") or row.get("product_name") or row.get("name")
-        category = row.get("category")
-        if not title or not category:
-            raise ValueError("Each CSV row needs title (or product_name) and category.")
+        title = row.get("name")
+        main_category = row.get("main_category")
+        sub_category = row.get("sub_category")
+        if not title or not main_category:
+            raise ValueError("Each CSV row needs name and main_category.")
+
+        # Calculate derived values
+        price = _number(row.get("discount_price")) or _number(row.get("actual_price"))
+
         products.append(
             {
                 "id": row.get("id") or row.get("product_id") or f"P-{uuid.uuid4().hex[:10].upper()}",
                 "sku": row.get("sku"),
                 "title": title,
                 "brand": row.get("brand"),
-                "category": category,
-                "price": _number(row.get("price")),
+                "category": f"{main_category} > {sub_category}" if sub_category else main_category,
+                "main_category": main_category,
+                "sub_category": sub_category,
+                "price": price,
+                "discount_price": _number(row.get("discount_price")),
+                "actual_price": _number(row.get("actual_price")),
                 "currency": row.get("currency") or "INR",
                 "description": row.get("description") or "",
                 "key_features": as_list(row.get("key_features") or row.get("features") or ""),
-                "rating": _number(row.get("rating")),
-                "review_count": _number(row.get("review_count"), integer=True),
+                "rating": _number(row.get("ratings")),
+                "review_count": _number(row.get("no_of_ratings"), integer=True),
                 "availability": row.get("availability") or "",
                 "shipping": row.get("shipping") or "",
                 "return_policy": row.get("return_policy") or row.get("returns") or "",
-                "source_url": row.get("source_url") or row.get("url") or "",
-                "image_url": row.get("image_url") or "",
+                "source_url": row.get("link") or row.get("url") or "",
+                "image_url": row.get("image") or row.get("image_url") or "",
                 "pair_id": row.get("pair_id") or "",
                 "condition": _normalise_condition(row.get("condition")),
             }

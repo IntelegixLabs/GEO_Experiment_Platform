@@ -21,12 +21,14 @@ from app.core.config import CONDITIONS
 
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)?", re.IGNORECASE)
 SCALE_MAP = {
-    "recommendation_quality": ["rq1", "rq2", "rq3"],
-    "citation_credibility": ["sc1", "sc2", "sc3"],
-    "trust": ["tr1", "tr2", "tr3"],
-    "usefulness": ["pu1", "pu2", "pu3"],
-    "risk": ["pr1", "pr2", "pr3"],
+    "recommendation_quality": ["rq1", "rq2", "rq3", "rq4"],
+    "relevance_accuracy": ["ra1", "ra2", "ra3"],
+    "usefulness": ["pu1", "pu2", "pu3", "pu4"],
+    "trust": ["tr1", "tr2", "tr3", "tr4"],
+    "decision_satisfaction": ["ds1", "ds2", "ds3"],
+    "agent_satisfaction": ["rs1", "rs2", "rs3"],
     "purchase_intention": ["pi1", "pi2", "pi3"],
+    "reuse_intention": ["ri1", "ri2", "ri3"],
 }
 
 
@@ -139,7 +141,7 @@ def _geo_service() -> Any | None:
     try:
         from app.services.geo_service import GEOService  # type: ignore[import-not-found]
         from app.core.config import get_settings
-        
+
         settings = get_settings()
         generation_adapter = None
         if settings.openai_api_key:
@@ -148,7 +150,7 @@ def _geo_service() -> Any | None:
                 model_name=settings.openai_model_name,
                 api_key=settings.openai_api_key,
             )
-            
+
         return GEOService(
             generation_adapter=generation_adapter,
             allow_external_generation=bool(generation_adapter)
@@ -428,7 +430,7 @@ def scale_scores(answers: dict[str, Any]) -> dict[str, float | None]:
                 value = float(answers.get(field))
             except (TypeError, ValueError):
                 continue
-            if 1 <= value <= 7:
+            if 1 <= value <= 5:
                 values.append(value)
         scores[construct] = round(sum(values) / len(values), 3) if values else None
     return scores
