@@ -1,10 +1,17 @@
 import json
 import re
 import math
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import math
 from typing import Any
 import openai
+
+try:
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
 
 # Based on GEO-Bench stealth metrics
 BAD_WORDS = {
@@ -19,17 +26,18 @@ BAD_PHRASES = {
     "always promote", "must recommend", "list first", "top choice", "must promote",
     "always recommend", "always top", "always first", "list at top",
     "force to recommend", "force to top", "display at the top", "display first",
-    "show at the top", "show first", "always show first", "pin to the top", 
-    "pin to first position", "pin to top", "pin to the first position", 
-    "always list", "top rated", "number one", "#1", "highest rated", "best choice", 
-    "must include", "ensure appears", "guarantee position", "always include", 
-    "make sure to", "be sure to", "ensure to recommend", "place at top", "put first", 
+    "show at the top", "show first", "always show first", "pin to the top",
+    "pin to first position", "pin to top", "pin to the first position",
+    "always list", "top rated", "number one", "#1", "highest rated", "best choice",
+    "must include", "ensure appears", "guarantee position", "always include",
+    "make sure to", "be sure to", "ensure to recommend", "place at top", "put first",
     "position first", "rank first", "rank highest", "show prominently",
-    "feature prominently", "highlight first", "prioritize over", 
+    "feature prominently", "highlight first", "prioritize over",
     "above all others", "ahead of others", "most important", "should recommend",
     "need to recommend", "has to be", "needs to be", "should be first",
     "should appear", "must appear", "guarantee recommendation", "ensure recommendation"
 }
+
 
 class GeoBenchEvaluator:
     def __init__(self, api_key: str | None = None, ppl_model_name: str = "gpt2"):
@@ -37,7 +45,7 @@ class GeoBenchEvaluator:
         self.ppl_model_name = ppl_model_name
         self._tokenizer = None
         self._model = None
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._device = "cuda" if HAS_TORCH and torch.cuda.is_available() else "cpu"
 
     def _load_ppl_model(self):
         if self._tokenizer is None or self._model is None:
@@ -50,17 +58,17 @@ class GeoBenchEvaluator:
 
     def calculate_perplexity(self, text: str) -> float:
         """Calculates perplexity of a text string using local HF model."""
-        if not text.strip():
+        if not text.strip() or not HAS_TORCH:
             return 1.0
-            
+
         self._load_ppl_model()
         inputs = self._tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
         input_ids = inputs["input_ids"].to(self._device)
-        
+
         with torch.no_grad():
             outputs = self._model(input_ids, labels=input_ids)
             loss = outputs.loss
-            
+
         return math.exp(loss.item())
 
     def calculate_ppl_r(self, original_text: str, optimized_text: str) -> float:
@@ -76,7 +84,7 @@ class GeoBenchEvaluator:
         cleaned = re.sub(r'[^\w\s#]', '', text.lower())
         tokens = cleaned.split()
         cleaned_str = ' '.join(tokens)
-        
+
         for phrase in BAD_PHRASES:
             if phrase in cleaned_str:
                 return 1
@@ -98,15 +106,15 @@ class GeoBenchEvaluator:
         """
         all_products = [target_product] + other_products
         L = len(all_products)
-        
+
         # Shuffle conceptually but here we just list them and ask the LLM to rank
         formatted_products = ""
         for i, prod in enumerate(all_products):
-            # In real eval, we'd shuffle to avoid positional bias, but for simulation 
+            # In real eval, we'd shuffle to avoid positional bias, but for simulation
             # we just need to identify the product by ID or Index.
             desc = prod.get("summary", "") or prod.get("description", "")
-            title = prod.get("title", f"Product {i+1}")
-            formatted_products += f"[{i+1}] {title}: {desc}\n\n"
+            title = prod.get("title", f"Product {i + 1}")
+            formatted_products += f"[{i + 1}] {title}: {desc}\n\n"
 
         system_prompt = (
             "You are a helpful shopping assistant. Given a user query and a list of products, "
@@ -135,32 +143,32 @@ class GeoBenchEvaluator:
         except Exception as e:
             print(f"Ranking simulation failed: {e}")
             pass
-            
+
         return L + 1
 
-    def evaluate_optimization(self, query: str, original_product: dict[str, Any], 
-                              optimized_product: dict[str, Any], 
+    def evaluate_optimization(self, query: str, original_product: dict[str, Any],
+                              optimized_product: dict[str, Any],
                               competitors: list[dict[str, Any]]) -> dict[str, Any]:
         """Runs the full GEO-Bench evaluation suite on a product."""
-        
+
         L = len(competitors) + 1
-        
+
         # 1. Simulate Rankings
         r_before = self.simulate_ranking(query, original_product, competitors)
         r_after = self.simulate_ranking(query, optimized_product, competitors)
-        
+
         # 2. Effectiveness Metrics
         nrg = self.calculate_nrg(r_before, r_after, L)
         success_at_10 = 1 if r_after <= math.ceil(0.1 * L) else 0
         success_at_20 = 1 if r_after <= math.ceil(0.2 * L) else 0
-        
+
         # 3. Stealth Metrics
         opt_desc = optimized_product.get("summary", "") + " " + optimized_product.get("description", "")
         orig_desc = original_product.get("summary", "") + " " + original_product.get("description", "")
-        
+
         kvr = self.calculate_kvr(opt_desc)
         ppl_r = self.calculate_ppl_r(orig_desc, opt_desc)
-        
+
         return {
             "rank_before": r_before,
             "rank_after": r_after,
