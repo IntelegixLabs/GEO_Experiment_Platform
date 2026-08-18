@@ -543,6 +543,15 @@ def build_analytics_report(
         ("Purchase intent", sessions_with_purchase_intent),
         ("Completed survey", completed_surveys),
     )
+
+    query_submit_events = db.scalars(select(Event).where(Event.event_type == "query_submit", Event.session_id.in_(select(Session.id).where(Session.consent.is_(True))))).all()
+    query_metrics = {"typed": 0, "suggested": 0}
+    for ev in query_submit_events:
+        if ev.metadata_json.get("is_suggested"):
+            query_metrics["suggested"] += 1
+        else:
+            query_metrics["typed"] += 1
+
     return {
         "generated_at": _utc_iso(utc_now()),
         "privacy": {
@@ -570,6 +579,7 @@ def build_analytics_report(
         "conditions": _condition_metrics(db),
         "category_effects": _category_effects(db),
         "respondents": _respondent_rows(db, limit=respondent_limit, offset=respondent_offset),
+        "query_metrics": query_metrics,
         "notes": [
             "All metrics exclude sessions without recorded active consent.",
             "Citation rate is cited product-query opportunities divided by all logged product-query candidates.",

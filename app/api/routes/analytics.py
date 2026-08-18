@@ -107,11 +107,21 @@ def _dashboard(db: DBSession) -> dict[str, Any]:
             .order_by(balance_cat, Product.condition)
         ).all()
     ]
+
+    query_submit_events = db.scalars(select(Event).where(Event.event_type == "query_submit")).all()
+    query_metrics = {"typed": 0, "suggested": 0}
+    for ev in query_submit_events:
+        if ev.metadata_json.get("is_suggested"):
+            query_metrics["suggested"] += 1
+        else:
+            query_metrics["typed"] += 1
+
     return {
         "totals": totals,
         "by_condition": metrics,
         "survey_means": survey_means,
         "catalogue_balance": balance,
+        "query_metrics": query_metrics,
         "interpretation_note": (
             "Citation rate is cited product-query opportunities divided by all logged product-query candidates. "
             "Use the exported candidate-level data for preregistered mixed-effects or fixed-effects models."

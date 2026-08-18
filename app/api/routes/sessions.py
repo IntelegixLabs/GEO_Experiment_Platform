@@ -12,7 +12,7 @@ from app.models import Event, Product, Query, Session, SurveyResponse
 from app.schemas import EventCreate, SessionCreate, SurveyCreate
 
 router = APIRouter(tags=["GEO study"])
-ALLOWED_EVENT_TYPES = {"product_open", "citation_open", "comparison_add", "purchase_intent", "survey_open"}
+ALLOWED_EVENT_TYPES = {"product_open", "citation_open", "comparison_add", "purchase_intent", "survey_open", "query_submit"}
 
 def _bad_request(message: str) -> HTTPException:
     return HTTPException(status_code=400, detail=message)
