@@ -1,5 +1,6 @@
 import os
 import json
+import functools
 from typing import Any, Iterable
 
 from sqlalchemy import select, delete, func, text, desc
@@ -13,13 +14,22 @@ from app.services.text import to_mapping, normalize_whitespace
 _openai_client = None
 
 
+@functools.lru_cache(maxsize=1024)
+def get_cached_embedding(text: str) -> list[float]:
+    return generate_embeddings([text])[0]
+
+
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
     global _openai_client
     if _openai_client is None:
         _openai_client = OpenAI()
     embeddings = []
-    chunk_size = 2000
+    chunk_size = 200
+    total_chunks = (len(texts) + chunk_size - 1) // chunk_size
     for i in range(0, len(texts), chunk_size):
+        current_chunk = (i // chunk_size) + 1
+        print(
+            f"  -> Generating embeddings: batch {current_chunk}/{total_chunks} ({min(i + chunk_size, len(texts))} of {len(texts)} products)...")
         chunk = texts[i:i + chunk_size]
         response = _openai_client.embeddings.create(
             input=chunk,
@@ -72,33 +82,50 @@ def index_products(products: Iterable[Any]):
         # Generate embeddings in memory using OpenAI
         embeddings = generate_embeddings(documents)
 
-        with SessionLocal() as db:
-            for i, p_id in enumerate(ids):
-                # Check if it exists
-                existing = db.execute(
-                    select(ProductVector).where(ProductVector.product_id == p_id)).scalar_one_or_none()
-                if existing:
-                    existing.embedding = embeddings[i]
-                    existing.metadata_json = metadatas[i]
-                else:
-                    vec = ProductVector(
-                        id=p_id,
-                        product_id=p_id,
-                        embedding=embeddings[i],
-                        metadata_json=metadatas[i]
-                    )
-                    db.add(vec)
-            db.commit()
+        batch_size = 200
+        total_batches = (len(ids) + batch_size - 1) // batch_size
+        for batch_start in range(0, len(ids), batch_size):
+            batch_end = min(batch_start + batch_size, len(ids))
+            current_batch = (batch_start // batch_size) + 1
+            print(
+                f"  -> Saving vectors to DB: batch {current_batch}/{total_batches} ({batch_end} of {len(ids)} products)...")
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    with SessionLocal() as db:
+                        for i in range(batch_start, batch_end):
+                            p_id = ids[i]
+                            # Check if it exists
+                            existing = db.execute(
+                                select(ProductVector).where(ProductVector.product_id == p_id)).scalar_one_or_none()
+                            if existing:
+                                existing.embedding = embeddings[i]
+                                existing.metadata_json = metadatas[i]
+                            else:
+                                vec = ProductVector(
+                                    id=p_id,
+                                    product_id=p_id,
+                                    embedding=embeddings[i],
+                                    metadata_json=metadatas[i]
+                                )
+                                db.add(vec)
+                        db.commit()
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    import time
+                    if attempt < max_retries - 1:
+                        print(
+                            f"    [Retry {attempt + 1}/{max_retries}] Serialization error committing batch {current_batch}, retrying in {2 * (attempt + 1)}s...")
+                        time.sleep(2 * (attempt + 1))
+                    else:
+                        print(f"Error committing batch {batch_start}-{batch_end} after {max_retries} attempts: {e}")
+                        raise
 
 
 def search_products(query: str, limit: int = 10, category_filter: str = None) -> list[RankedCandidate]:
-    query_embedding = generate_embeddings([query])[0]
+    query_embedding = get_cached_embedding(query)
 
     with SessionLocal() as db:
-        count = db.execute(select(func.count()).select_from(ProductVector)).scalar_one()
-        if count == 0:
-            return []
-
         # We need a list of vectors. We will order by L2 distance `<->`
         # Because CockroachDB supports pgvector's `<->` operator
         stmt = select(ProductVector, ProductVector.embedding.l2_distance(query_embedding).label("distance"))
@@ -183,23 +210,21 @@ def get_indexed_products_page(page: int = 1, limit: int = 20, query: str = None,
                 stmt = stmt.join(Product, ProductVector.product_id == Product.id)
                 stmt = stmt.where(func.lower(Product.category) == category_filter.strip().lower())
 
-            # Paginate directly in the database
+            # Order by id deterministically, then Paginate directly in the database
             total_filtered = db.execute(select(func.count()).select_from(stmt.subquery())).scalar_one()
 
             pages = (total_filtered + limit - 1) // limit if limit > 0 else 1
             page = max(1, min(page, pages)) if pages > 0 else 1
             offset = (page - 1) * limit
 
-            stmt = stmt.offset(offset).limit(limit)
+            # Sort by ProductVector.id which is predictable
+            stmt = stmt.order_by(ProductVector.id.asc()).offset(offset).limit(limit)
             results = db.execute(stmt).scalars().all()
 
             all_items = []
             for metadata in results:
                 if metadata:
                     all_items.append(metadata)
-
-            # Since we only fetched a page, sort the page, or ideally rely on DB sorting.
-            all_items.sort(key=lambda p: (str(p.get("category", "")), str(p.get("title", "")), str(p.get("id", ""))))
 
             return {
                 "items": all_items,

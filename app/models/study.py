@@ -81,7 +81,10 @@ from pgvector.sqlalchemy import Vector
 
 class ProductVector(Base):
     __tablename__ = "product_vectors"
-    
+    __table_args__ = (
+        Index("idx_product_vector_embedding", "embedding", postgresql_using="hnsw", postgresql_ops={"embedding": "vector_l2_ops"}),
+    )
+
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     product_id: Mapped[str] = mapped_column(ForeignKey("products.id"), nullable=False)
     embedding = mapped_column(Vector(384), nullable=False)
