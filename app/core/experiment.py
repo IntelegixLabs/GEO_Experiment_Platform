@@ -144,10 +144,16 @@ def _geo_service() -> Any | None:
 
         settings = get_settings()
         generation_adapter = None
-        if settings.openai_api_key:
+        if settings.llm_provider == "gemini" and settings.gemini_api_key:
+            from app.services.gemini_adapter import GeminiGenerationAdapter
+            generation_adapter = GeminiGenerationAdapter(
+                model_name=settings.llm_model_name,
+                api_key=settings.gemini_api_key,
+            )
+        elif settings.llm_provider == "openai" and settings.openai_api_key:
             from app.services.openai_adapter import OpenAIGenerationAdapter
             generation_adapter = OpenAIGenerationAdapter(
-                model_name=settings.openai_model_name,
+                model_name=settings.llm_model_name,
                 api_key=settings.openai_api_key,
             )
 

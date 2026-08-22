@@ -2,6 +2,7 @@ import json
 from typing import Any
 import openai
 
+
 class AgenticGEOOptimizer:
     """Agentic GEO Optimizer following the E-GEO and AgenticGEO paradigms."""
 
@@ -16,9 +17,14 @@ class AgenticGEOOptimizer:
         "Format": "Structure the content using clear headings and bullet points for readability and easily scannable engagement."
     }
 
-    def __init__(self, api_key: str | None = None, model_name: str = "gpt-4o-mini"):
-        self.client = openai.Client(api_key=api_key) if api_key else openai.Client()
+    def __init__(self, api_key: str | None = None, model_name: str = "gpt-4o-mini", provider: str = "openai"):
+        self.provider = provider.lower()
         self.model = model_name
+        if self.provider == "gemini":
+            from google import genai
+            self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
+        else:
+            self.client = openai.Client(api_key=api_key) if api_key else openai.Client()
 
     def plan_strategies(self, product: dict[str, Any]) -> list[str]:
         """Analyzes the product and selects the best strategies to apply."""
@@ -38,7 +44,7 @@ class AgenticGEOOptimizer:
         )
         for name, desc in self.STRATEGY_CATALOG.items():
             system_prompt += f"- {name}: {desc}\n"
-            
+
         system_prompt += (
             "\nRules:\n"
             "1. For technical products, 'Statistics Addition' is recommended.\n"
@@ -49,16 +55,30 @@ class AgenticGEOOptimizer:
         )
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Product: {json.dumps(product_context)}"}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.0
-            )
-            content = response.choices[0].message.content
+            if self.provider == "gemini":
+                from google.genai import types
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=f"Product: {json.dumps(product_context)}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        response_mime_type="application/json",
+                        temperature=0.0
+                    )
+                )
+                content = response.text
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Product: {json.dumps(product_context)}"}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0
+                )
+                content = response.choices[0].message.content
+
             if content:
                 parsed = json.loads(content)
                 selected = parsed.get("selected_strategies", [])
@@ -68,7 +88,7 @@ class AgenticGEOOptimizer:
         except Exception as e:
             print(f"Planner failed: {e}")
             pass
-            
+
         return ["Fluency Optimization", "Competitiveness", "Format"]
 
     def rewrite_product(self, product: dict[str, Any], strategies: list[str]) -> dict[str, Any]:
@@ -84,7 +104,7 @@ class AgenticGEOOptimizer:
         for s in strategies:
             if s in self.STRATEGY_CATALOG:
                 system_prompt += f"- {s}: {self.STRATEGY_CATALOG[s]}\n"
-                
+
         system_prompt += (
             "\nOutput a JSON object with the rewritten fields:\n"
             '{\n'
@@ -110,16 +130,30 @@ class AgenticGEOOptimizer:
         }
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Product: {json.dumps(product_context)}"}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.7
-            )
-            content = response.choices[0].message.content
+            if self.provider == "gemini":
+                from google.genai import types
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=f"Product: {json.dumps(product_context)}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        response_mime_type="application/json",
+                        temperature=0.7
+                    )
+                )
+                content = response.text
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Product: {json.dumps(product_context)}"}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.7
+                )
+                content = response.choices[0].message.content
+
             if content:
                 parsed = json.loads(content)
                 optimized_product = dict(product)
@@ -136,5 +170,5 @@ class AgenticGEOOptimizer:
         except Exception as e:
             print(f"Rewriter failed: {e}")
             pass
-            
+
         return product
