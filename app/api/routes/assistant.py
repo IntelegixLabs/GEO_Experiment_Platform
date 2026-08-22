@@ -247,19 +247,20 @@ def run_probes(payload: ProbeCreate, db: DBSession = Depends(get_db)) -> dict[st
             candidate = _candidate_payload(product, position)
             db.add(ProbeCandidate(probe_run_id=probe_id, cited=product["id"] in cited_ids, **candidate))
         candidates_detail = []
-        for pos, product in enumerate(ranked[:10], start=1):
-            candidates_detail.append({
-                "rank_position": pos,
-                "product_id": product["id"],
-                "title": product.get("title", ""),
-                "category": product.get("category", ""),
-                "condition": product.get("condition", "UNKNOWN"),
-                "retrieval_score": round(float(product.get("retrieval_score", product.get("score", 0.0))), 3),
-                "lexical_score": round(float(product.get("lexical_score", 0.0)), 3),
-                "semantic_score": round(float(product.get("semantic_score", 0.0)), 3),
-                "evidence_score": round(float(product.get("evidence_score", 0.0)), 3),
-                "cited": product["id"] in cited_ids,
-            })
+        for pos, product in enumerate(ranked, start=1):
+            if pos <= 10 or product["id"] in cited_ids:
+                candidates_detail.append({
+                    "rank_position": pos,
+                    "product_id": product["id"],
+                    "title": product.get("title", ""),
+                    "category": product.get("category", ""),
+                    "condition": product.get("condition", "UNKNOWN"),
+                    "retrieval_score": round(float(product.get("retrieval_score", product.get("score", 0.0))), 3),
+                    "lexical_score": round(float(product.get("lexical_score", 0.0)), 3),
+                    "semantic_score": round(float(product.get("semantic_score", 0.0)), 3),
+                    "evidence_score": round(float(product.get("evidence_score", 0.0)), 3),
+                    "cited": product["id"] in cited_ids,
+                })
         runs.append(
             {
                 "probe_run_id": probe_id,

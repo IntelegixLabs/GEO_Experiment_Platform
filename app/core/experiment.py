@@ -406,7 +406,7 @@ def make_answer(
                     str(item.get("id") or item.get("product_id")) if isinstance(item, dict) else str(item)
                     for item in raw_cited
                 }
-                cited = [product for product in ranked if product["id"] in cited_ids][:3]
+                cited = [product for product in ranked if product["id"] in cited_ids]
                 if answer and cited:
                     suggestions = result.get("suggestions", [])
                     return answer, cited, suggestions

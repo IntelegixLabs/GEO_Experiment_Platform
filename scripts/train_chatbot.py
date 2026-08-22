@@ -17,6 +17,7 @@ from app.services.vector_db import index_products
 from sqlalchemy import select, func, delete
 from app.core.experiment import utc_now
 
+
 def _clean_price(raw: str | None) -> float | None:
     if not raw or not raw.strip():
         return None
@@ -25,6 +26,7 @@ def _clean_price(raw: str | None) -> float | None:
         return float(cleaned)
     except ValueError:
         return None
+
 
 def _clean_ratings_count(raw: str | None) -> int | None:
     if not raw or not raw.strip():
@@ -35,6 +37,7 @@ def _clean_ratings_count(raw: str | None) -> int | None:
     except ValueError:
         return None
 
+
 def _clean_rating(raw: str | None) -> float | None:
     if not raw or not raw.strip():
         return None
@@ -42,6 +45,7 @@ def _clean_rating(raw: str | None) -> float | None:
         return float(raw.strip())
     except ValueError:
         return None
+
 
 def parse_row(row: dict, row_number: int, dataset_name: str) -> dict | None:
     name = (row.get("name") or "").strip()
@@ -52,7 +56,7 @@ def parse_row(row: dict, row_number: int, dataset_name: str) -> dict | None:
         return None
 
     category = sub_cat or main_cat
-    
+
     # We create a stable ID based on dataset name and row number to avoid collisions
     prefix = "".join([c for c in dataset_name if c.isalpha()]).upper()[:5]
     product_id = f"TRN-{prefix}-{row_number:06d}"
@@ -81,13 +85,14 @@ def parse_row(row: dict, row_number: int, dataset_name: str) -> dict | None:
         "return_policy": "",
         "source_url": (row.get("link") or "")[:2000],
         "image_url": (row.get("image") or "")[:2000],
-        "condition": "GEO_OPTIMIZED", # We want all to be trained
+        "condition": "GEO_OPTIMIZED",  # We want all to be trained
         "pair_id": None,
         "source_dataset": dataset_name,
         "source_row_number": row_number,
         "source_product_key": f"train-{dataset_name}-{row_number}",
         "data_quality_flags": [],
     }
+
 
 def load_csv_products(csv_path: Path, limit: int = None):
     dataset_name = csv_path.name
@@ -103,26 +108,30 @@ def load_csv_products(csv_path: Path, limit: int = None):
     if limit:
         products = products[:limit]
         print(f"  Limited {dataset_name} to {limit} products.")
-        
+
     return products, dataset_name
+
 
 def process_all_products(all_products: list, dataset_names: list, treatment_percentage: int, cache_dir: Path):
     print(f"\nTotal valid products to train: {len(all_products)}")
-    
-    # 1. Exact Split Calculation
-    num_treated = int(len(all_products) * (treatment_percentage / 100))
-    print(f"Applying exact split: {num_treated} GEO_OPTIMIZED, {len(all_products) - num_treated} CONTROL")
-    
-    # Sort deterministically by ID, then assign condition
-    all_products.sort(key=lambda p: p["id"])
-    for i, prod in enumerate(all_products):
-        if i < num_treated:
-            prod["condition"] = "GEO_OPTIMIZED"
-        else:
-            prod["condition"] = "CONTROL"
-    
+
+    # 1. Exact Split Calculation Per Dataset
+    print(f"Applying exact split of {treatment_percentage}% per dataset")
+    for d_name in dataset_names:
+        dataset_products = [p for p in all_products if p["source_dataset"] == d_name]
+        num_treated = int(len(dataset_products) * (treatment_percentage / 100))
+        print(f"  - {d_name}: {num_treated} GEO_OPTIMIZED, {len(dataset_products) - num_treated} CONTROL")
+
+        # Sort deterministically by ID to ensure stable assignment
+        dataset_products.sort(key=lambda p: p["id"])
+        for i, prod in enumerate(dataset_products):
+            if i < num_treated:
+                prod["condition"] = "GEO_OPTIMIZED"
+            else:
+                prod["condition"] = "CONTROL"
+
     # Optional: shuffle back or leave sorted. Let's leave them sorted for consistency.
-    
+
     # 2. Load caches for all datasets
     caches = {}
     for d_name in dataset_names:
@@ -141,24 +150,24 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
     # 3. Process Products
     optimized_count = 0
     control_count = 0
-    
+
     # We will append to cache files as we go, so open them in append mode
     file_handles = {d_name: open(caches[d_name]["path"], "a", encoding="utf-8") for d_name in dataset_names}
-    
+
     try:
         from app.core.experiment import factual_geo_bundle
-        
+
         for i, prod in enumerate(all_products, 1):
             pid = prod["id"]
             d_name = prod["source_dataset"]
             cache = caches[d_name]["data"]
             f_out = file_handles[d_name]
-            
+
             if prod["condition"] == "CONTROL":
                 prod["geo_bundle"] = factual_geo_bundle(prod)
                 control_count += 1
                 continue
-                
+
             if pid in cache:
                 prod["geo_bundle"] = cache[pid]
                 optimized_count += 1
@@ -173,14 +182,14 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
                 except Exception as e:
                     print(f"  -> Error optimizing {pid}: {e}")
                     prod["geo_bundle"] = None
-                    
+
                 time.sleep(1)
     finally:
         for f in file_handles.values():
             f.close()
 
     print(f"\nProcessing complete. {optimized_count} optimized, {control_count} control.")
-    
+
     # 4. DB Insertion (Single Run)
     valid_products = [p for p in all_products if p.get("geo_bundle")]
     if not valid_products:
@@ -192,10 +201,10 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
     import uuid
     from app.models.study import GEOOptimizationApplication, GEOOptimizedProduct, GEOOptimizationConfig
     from sqlalchemy.exc import SQLAlchemyError
-    
+
     run_id = f"TRN-{uuid.uuid4().hex[:12]}"
     max_retries = 5
-    
+
     for attempt in range(max_retries):
         try:
             with SessionLocal() as db:
@@ -214,13 +223,13 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
                     db.commit()
 
                 application = GEOOptimizationApplication(
-                    id=run_id, config_id=config_id, 
+                    id=run_id, config_id=config_id,
                     config_snapshot_json={"note": "Batch CSV training run"},
                     scope_summary_json={"categories": dataset_names, "total_products": len(valid_products)},
                     previous_assignment_json={},
                     application_summary_json={
-                        "status": "completed", 
-                        "selected_products": len(valid_products), 
+                        "status": "completed",
+                        "selected_products": len(valid_products),
                         "updated_products": len(valid_products),
                         "control_products": control_count,
                         "geo_optimized_products": optimized_count,
@@ -229,13 +238,22 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
                     safety_notes_json=["Batch training across all CSVs."], created_at=now,
                 )
                 db.add(application)
-                
+
                 print("Cleaning up old DB entries for target datasets...")
+                from app.models.study import ProbeCandidate, ProbeRun, QueryCandidate
+                # Delete foreign key references in other tables before deleting the products
+                db.execute(QueryCandidate.__table__.delete().where(
+                    QueryCandidate.product_id.in_(select(Product.id).where(Product.source_dataset.in_(dataset_names)))
+                ))
+                db.execute(ProbeCandidate.__table__.delete().where(
+                    ProbeCandidate.product_id.in_(select(Product.id).where(Product.source_dataset.in_(dataset_names)))
+                ))
                 db.execute(ProductVector.__table__.delete().where(
                     ProductVector.product_id.in_(select(Product.id).where(Product.source_dataset.in_(dataset_names)))
                 ))
                 db.execute(GEOOptimizedProduct.__table__.delete().where(
-                    GEOOptimizedProduct.product_id.in_(select(Product.id).where(Product.source_dataset.in_(dataset_names)))
+                    GEOOptimizedProduct.product_id.in_(
+                        select(Product.id).where(Product.source_dataset.in_(dataset_names)))
                 ))
                 db.execute(Product.__table__.delete().where(Product.source_dataset.in_(dataset_names)))
                 db.flush()
@@ -260,7 +278,7 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
                 db.commit()
             break
         except SQLAlchemyError as e:
-            print(f"Database connection error on attempt {attempt+1}/{max_retries}: {e}")
+            print(f"Database connection error on attempt {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:
                 print("Retrying in 5 seconds...")
                 time.sleep(5)
@@ -271,12 +289,14 @@ def process_all_products(all_products: list, dataset_names: list, treatment_perc
     print("Indexing products for the Chatbot Vector DB (RAG)...")
     index_products(valid_products)
 
+
 def main():
     parser = argparse.ArgumentParser(description="Train Chatbot from CSV Data")
     parser.add_argument("--csv", help="Path to a single training CSV file")
     parser.add_argument("--dir", help="Path to a directory containing CSV files to process")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of rows to process per file")
-    parser.add_argument("--split", type=int, default=100, help="Percentage of products to run generative GEO optimization on (e.g. 50 for 50/50 split). The rest will remain as CONTROL.")
+    parser.add_argument("--split", type=int, default=100,
+                        help="Percentage of products to run generative GEO optimization on (e.g. 50 for 50/50 split). The rest will remain as CONTROL.")
     args = parser.parse_args()
 
     if not args.csv and not args.dir:
@@ -302,7 +322,7 @@ def main():
         if not dir_path.is_dir():
             print(f"Error: Directory not found at {dir_path}")
             sys.exit(1)
-        
+
         cache_dir = dir_path
         csv_files = list(dir_path.glob("*.csv"))
         print(f"Found {len(csv_files)} CSV files in {dir_path}. Reading data...\n")
@@ -312,13 +332,14 @@ def main():
             prods, d_name = load_csv_products(csv_file, args.limit)
             all_products.extend(prods)
             dataset_names.append(d_name)
-            
+
     if all_products:
         process_all_products(all_products, dataset_names, args.split, cache_dir)
         print("\nAll Training Complete!")
         print("The Chatbot is now ready to retrieve and serve these optimized products.")
     else:
         print("No products found to process.")
+
 
 if __name__ == "__main__":
     main()

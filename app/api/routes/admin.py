@@ -15,7 +15,7 @@ from app.core.catalog import parse_catalog_csv, product_from_import, product_rec
 from app.core.experiment import build_geo_bundle, utc_now, assign_conditions
 from app.db.session import get_db
 from app.models import Event, GEOOptimizationApplication, GEOOptimizationConfig, GEOOptimizedProduct, Product, Query, \
-    Session, SurveyResponse
+    Session, SurveyResponse, QueryCandidate
 from app.schemas import CatalogImportCreate, GEOOptimizationApply
 from app.schemas.study import (
     GEO_ASSIGNMENT_STRATEGIES,
@@ -427,9 +427,9 @@ def _apply_geo_optimization_sync(payload: GEOOptimizationApply, db: DBSession) -
             safety_notes_json=[
                 "Factual GEO bundles are generated from catalog facts only.",
                 "Parameter weights and optimization target are persisted study settings; they do not invoke an external LLM.",
-                *([
-                      "This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
-                    outcome_counts.values()) else []),
+                *(
+                    ["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
+                        outcome_counts.values()) else []),
             ], created_at=now,
         )
         db.add(application)
@@ -579,9 +579,9 @@ def _apply_geo_optimization_stream(payload: GEOOptimizationApply, db: DBSession)
             safety_notes_json=[
                 "Factual GEO bundles are generated from catalog facts only.",
                 "Parameter weights and optimization target are persisted study settings; they do not invoke an external LLM.",
-                *([
-                      "This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
-                    outcome_counts.values()) else []),
+                *(
+                    ["This configuration was applied after outcome data existed; do not pool the changed wave with prior observations."] if any(
+                        outcome_counts.values()) else []),
             ], created_at=now,
         )
         db.add(application)
@@ -856,6 +856,31 @@ def admin_respondent_activity(session_id: str, db: DBSession = Depends(get_db)) 
             for s in surveys
         ],
     }
+
+
+@router.delete("/admin/respondents/{session_id}")
+def admin_delete_respondent(session_id: str, db: DBSession = Depends(get_db)) -> dict[str, Any]:
+    session = db.get(Session, session_id)
+    if not session:
+        raise _bad_request("Respondent session not found.")
+
+    try:
+        # Delete associated queries, events, and surveys
+        # We delete manually in case foreign keys don't cascade on delete in the DB setup
+        db.execute(QueryCandidate.__table__.delete().where(
+            QueryCandidate.query_id.in_(select(Query.id).where(Query.session_id == session_id))
+        ))
+        db.execute(Event.__table__.delete().where(Event.session_id == session_id))
+        db.execute(Query.__table__.delete().where(Query.session_id == session_id))
+        db.execute(SurveyResponse.__table__.delete().where(SurveyResponse.session_id == session_id))
+
+        # Finally delete the session
+        db.delete(session)
+        db.commit()
+        return {"status": "success", "message": f"Respondent {session_id} and all activity deleted."}
+    except Exception as e:
+        db.rollback()
+        raise _bad_request(f"Failed to delete respondent: {str(e)}")
 
 
 class LoginRequest(BaseModel):
