@@ -13,6 +13,8 @@ from app.services.text import to_mapping, normalize_whitespace
 
 _openai_client = None
 
+import functools
+
 
 @functools.lru_cache(maxsize=1024)
 def get_cached_embedding(text: str) -> list[float]:
@@ -128,7 +130,11 @@ def search_products(query: str, limit: int = 10, category_filter: str = None) ->
     with SessionLocal() as db:
         # We need a list of vectors. We will order by L2 distance `<->`
         # Because CockroachDB supports pgvector's `<->` operator
-        stmt = select(ProductVector, ProductVector.embedding.l2_distance(query_embedding).label("distance"))
+        stmt = select(
+            ProductVector.id,
+            ProductVector.metadata_json,
+            ProductVector.embedding.l2_distance(query_embedding).label("distance")
+        )
 
         if category_filter:
             # Join with Product to filter by category
@@ -140,11 +146,10 @@ def search_products(query: str, limit: int = 10, category_filter: str = None) ->
 
         ranked = []
         for idx, row in enumerate(results):
-            pv = row.ProductVector
             distance = row.distance
             score = max(0.0, 1.0 - (float(distance) / 2.0))
 
-            product = pv.metadata_json
+            product = row.metadata_json
             product["score"] = round(score, 6)
             product["retrieval_score"] = round(score, 6)
 

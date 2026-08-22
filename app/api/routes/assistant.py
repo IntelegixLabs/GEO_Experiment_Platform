@@ -18,7 +18,7 @@ from app.services.geo_service import GEOService
 from app.services.retrieval import RetrievalConfig
 
 router = APIRouter(tags=["GEO study"])
-RETRIEVAL_POOL_SIZE = 250
+RETRIEVAL_POOL_SIZE = 50
 
 
 def _bad_request(message: str) -> HTTPException:
@@ -80,13 +80,24 @@ def _catalog_records(
 ) -> list[dict[str, Any]]:
     # Search ONLY ChromaDB Vector DB using semantic similarity matching
     try:
+        import time
+        t0 = time.time()
         from app.services.vector_db import search_products
         ranked_candidates = search_products(query_text or "", limit=limit, category_filter=category_filter)
+        t1 = time.time()
+        print('  search_products:', t1 - t0)
+
+        # Batch load existing products to avoid N+1 queries (saves ~15s per search)
+        candidate_ids = [c.product.get("id") for c in ranked_candidates if c.product.get("id")]
+        existing_products = set(db.scalars(select(Product.id).where(Product.id.in_(candidate_ids))).all())
+        t2 = time.time()
+        print('  existing_products:', t2 - t1)
+
         results = []
         for c in ranked_candidates:
             prod_dict = c.product
             pid = prod_dict.get("id")
-            if pid and not db.get(Product, pid):
+            if pid and pid not in existing_products:
                 try:
                     db.add(
                         Product(
