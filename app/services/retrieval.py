@@ -344,28 +344,19 @@ class TransparentRetriever:
         limit: int | None = None,
         include_product: bool = False,
     ) -> dict[str, Any]:
-        intent = analyse_query(query, category_filter)
-        candidate_limit = max(1, limit if limit is not None else self.config.candidate_limit)
-        
-        try:
-            from app.services.vector_db import search_products
-            ranked = search_products(str(query), limit=candidate_limit, category_filter=category_filter)
-            if not ranked:
-                _, ranked = self.rank(products, query, category_filter=category_filter, limit=limit)
-        except Exception as e:
-            print("Vector search failed, falling back to basic scoring.", e)
-            _, ranked = self.rank(products, query, category_filter=category_filter, limit=limit)
-            
+        intent, ranked = self.rank(products, query, category_filter=category_filter, limit=limit)
+
         return {
             "intent": intent.as_dict(),
             "retriever": {
-                "name": "chroma-vector-retriever",
-                "version": "1.0",
-                "semantic_adapter": "sentence-transformers",
+                "name": "geo-retriever",
+                "version": "1.1",
+                "semantic_adapter": "pgvector",
                 "semantic_adapter_version": "1.0",
                 "config": self.config.as_dict(),
             },
             "results": [candidate.as_dict(include_product=include_product) for candidate in ranked],
+            "ranked": [candidate.as_dict(include_product=include_product) for candidate in ranked],
         }
 
     def _score_product(self, product: dict[str, Any], intent: SearchIntent) -> RankedCandidate:
@@ -411,7 +402,12 @@ class TransparentRetriever:
         evidence_tokens = set(tokenize(evidence_text))
         evidence_matches = sorted(query_tokens & evidence_tokens)
         document_tokens = set().union(*field_tokens.values(), evidence_tokens)
-        semantic = self.semantic_adapter.score(query_tokens, document_tokens)
+
+        precomputed_score = product.get("score")
+        if precomputed_score is not None:
+            semantic = SemanticMatch(score=float(precomputed_score), matched_concepts=("vector_search_match",))
+        else:
+            semantic = self.semantic_adapter.score(query_tokens, document_tokens)
 
         base_relevance_hits = sum(len(items) for items in overlap.values()) + len(evidence_matches) + int(category_match) + int(semantic.score > 0)
         structural_bonus = 0.0
