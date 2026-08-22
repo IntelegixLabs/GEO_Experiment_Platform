@@ -339,13 +339,14 @@ class LLMGEOBuilder(FactualGEOBuilder):
         super().__init__()
         self.client = generation_adapter.client
         self.model = generation_adapter.model
+        self.adapter_name = generation_adapter.name
 
     def build(self, product: Any) -> dict[str, Any]:
         record = to_mapping(product)
         # First build the factual baseline so we have the same structure and specifications
         bundle = super().build(product)
         bundle["treatment_version"] = self.version
-        
+
         # Use LLM to rewrite the summary and claims to be highly persuasive
         system_prompt = (
             "You are an expert E-Commerce Generative Engine Optimizer. "
@@ -379,18 +380,40 @@ class LLMGEOBuilder(FactualGEOBuilder):
         })
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Optimize this product:\n{product_json}"}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.7
-            )
+            is_gemini = getattr(self, 'adapter_name', '') == 'gemini-adapter'
             import json
-            content = response.choices[0].message.content
+
+            if is_gemini:
+                from google.genai import types
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=f"Optimize this product:\n{product_json}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        response_mime_type="application/json",
+                        temperature=0.7
+                    )
+                )
+                content = response.text
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Optimize this product:\n{product_json}"}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.7
+                )
+                content = response.choices[0].message.content
+
             if content:
+                content = content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
                 parsed = json.loads(content)
                 if "summary" in parsed:
                     bundle["summary"] = parsed["summary"]

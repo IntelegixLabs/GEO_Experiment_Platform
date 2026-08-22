@@ -132,8 +132,11 @@ class Settings:
     amazon_catalog_csv: Path | None
     catalog_import_batch_size: int
     api_prefix: str = "/api"
+    llm_provider: str = "openai"
+    llm_model_name: str = "gpt-4o-mini"
     openai_api_key: str | None = None
-    openai_model_name: str = "gpt-4o-mini"
+    gemini_api_key: str | None = None
+    openai_model_name: str = "gpt-4o-mini" # deprecated, use llm_model_name
     admin_user: str | None = None
     admin_password: str | None = None
 
@@ -143,6 +146,16 @@ def get_settings() -> Settings:
     backend_dir = Path(__file__).resolve().parents[2]
     load_env_file(backend_dir / ".env")
     default_db = (backend_dir / "data" / "geo_study.sqlite3").resolve().as_posix()
+
+    # Fallback logic for model name
+    llm_provider = _env("LLM", _env("LLM_PROVIDER", "openai")).lower()
+
+    if llm_provider == "gemini":
+        model_name = _env("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+    else:
+        legacy_model = _env("OPENAI_MODEL_NAME", "gpt-4o-mini")
+        model_name = _env("LLM_MODEL_NAME", legacy_model)
+
     return Settings(
         backend_dir=backend_dir,
         database_url=_database_url(f"sqlite:///{default_db}"),
@@ -154,8 +167,11 @@ def get_settings() -> Settings:
         seed_catalog_csv=_optional_path(_env("GEO_SEED_CATALOG_CSV", ""), base_dir=backend_dir),
         amazon_catalog_csv=_optional_path(_env("GEO_AMAZON_CATALOG_CSV", ""), base_dir=backend_dir),
         catalog_import_batch_size=_positive_int_env("GEO_CATALOG_IMPORT_BATCH_SIZE", 1000),
+        llm_provider=llm_provider,
+        llm_model_name=model_name,
         openai_api_key=_env("OPENAI_API_KEY", "") or None,
-        openai_model_name=_env("OPENAI_MODEL_NAME", "gpt-4o-mini"),
+        gemini_api_key=_env("GEMINI_API_KEY", "") or None,
+        openai_model_name=model_name,
         admin_user=_env("ADMIN_USER", "") or None,
         admin_password=_env("ADMIN_PASSWORD", "") or None,
     )

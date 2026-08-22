@@ -5,6 +5,7 @@ SQLAlchemy>=2.0,<3.0
 psycopg[binary]>=3.2,<4.0
 pydantic>=2.7,<3.0
 openai>=1.0.0
+google-genai>=0.2.0
 
 # Development and API verification
 pytest>=8.0,<9.0
